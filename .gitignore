@@ -172,3 +172,17 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+# === Codebase Companion ===
+# Local GitHub clone data (parsed .py files)
+data/
+
+# ChromaDB vector store (auto-generated)
+chroma_db/
+
+# LangChain logs (optional)
+langchain_logs/
+
+# Hugging Face cache (if you run models locally)
+~/.cache/huggingface/
