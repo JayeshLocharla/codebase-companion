@@ -6,6 +6,7 @@ from app.agents.documenter import DocumenterAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.tester_agent import TesterAgent
 from app.agents.readme_agent import ReadmeAgent
+from app.utils.file_utils import collect_supported_files
 
 
 def run_pipeline(repo_path="data/repos", max_files=3):
@@ -29,11 +30,12 @@ def run_pipeline(repo_path="data/repos", max_files=3):
 
     # Documenter — file-level
     print("\n📘 Step 2b: Documenter Agent (file-level summary)")
-    py_files = glob.glob(f"{repo_path}/**/*.py", recursive=True)
-    if py_files:
-        documenter.summarize_file(filepath=py_files[0])
+    all_files = collect_supported_files(repo_path)
+    if all_files:
+        documenter.summarize_file(filepath=all_files[0])
     else:
-        print("⚠️ No Python files found for summary.")
+        print("⚠️ No supported files found for summary.")
+
 
     # QA
     print("\n🧪 Step 3: QA Agent")

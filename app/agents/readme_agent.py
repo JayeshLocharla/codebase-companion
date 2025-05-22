@@ -6,8 +6,8 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
-
-from app.utils.parser import parse_python_file
+from app.utils.file_utils import collect_supported_files
+from app.utils.parser import parse_file_by_type
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -38,13 +38,14 @@ class ReadmeAgent:
         self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
 
     def generate_readme(self, code_dir="data/repos", max_blocks=50):
-        py_files = glob(f"{code_dir}/**/*.py", recursive=True)
-        print(f"📁 Found {len(py_files)} Python files in repo")
+        all_files = collect_supported_files(code_dir)
+        print(f"📁 Found {len(all_files)} supported files in repo")
 
         all_blocks = []
-        for f in py_files:
-            blocks = parse_python_file(f)
+        for f in all_files:
+            blocks = parse_file_by_type(f)
             all_blocks.extend(block["code"] for block in blocks)
+
 
         if not all_blocks:
             return "⚠️ No code blocks found to generate README."

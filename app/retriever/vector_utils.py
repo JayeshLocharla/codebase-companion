@@ -5,3 +5,4 @@ def get_vectorstore(persist_directory="chroma_db", model_name="BAAI/bge-small-en
     embedding_model = HuggingFaceEmbeddings(model_name=model_name)
     vectorstore = Chroma(persist_directory=persist_directory, embedding_function=embedding_model)
     return vectorstore
+ 

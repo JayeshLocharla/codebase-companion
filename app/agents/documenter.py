@@ -7,8 +7,10 @@ from app.retriever.vector_utils import get_vectorstore
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.output_parsers import StrOutputParser
+from app.utils.file_utils import collect_supported_files
 
-from app.utils.parser import parse_python_file  # make sure this exists
+
+from app.utils.parser import parse_file_by_type  # make sure this exists
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 load_dotenv()
@@ -41,12 +43,12 @@ class DocumenterAgent:
         self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
 
     def document_functions(self, code_dir: str = "data/repos", limit: int = 5):
-        py_files = glob(f"{code_dir}/**/*.py", recursive=True)
-        print(f"📁 Found {len(py_files)} Python files")
+        all_files = collect_supported_files(code_dir)
+        print(f"📁 Found {len(all_files)} supported files")
 
-        for f in py_files[:limit]:
+        for f in all_files[:limit]:
             print(f"\n📄 File: {f}")
-            blocks = parse_python_file(f)
+            blocks = parse_file_by_type(f)
 
             for block in blocks:
                 code_snippet = block["code"]
@@ -56,10 +58,11 @@ class DocumenterAgent:
                     print(docstring.strip())
                 except Exception as e:
                     print(f"❌ Failed on {block['name']}: {e}")
+
                     
     def summarize_file(self, filepath: str):
         """Generate a high-level summary of a Python file's purpose and structure."""
-        blocks = parse_python_file(filepath)
+        blocks = parse_file_by_type(filepath)
         if not blocks:
             print(f"⚠️ No code blocks found in: {filepath}")
             return
