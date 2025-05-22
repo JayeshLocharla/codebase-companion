@@ -3,8 +3,7 @@ from dotenv import load_dotenv
 from glob import glob
 
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from app.retriever.vector_utils import get_vectorstore
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.output_parsers import StrOutputParser
@@ -18,12 +17,9 @@ load_dotenv()
 class DocumenterAgent:
     def __init__(self):
         # Embeddings + vectorstore setup
-        self.embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
-        self.vectorstore = Chroma(
-            persist_directory="chroma_db",
-            embedding_function=self.embedding_model
-        )
-        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 1})  # 1 most relevant block per query
+        self.vectorstore = get_vectorstore()
+        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 1})
+
 
         # Prompt to generate docstrings
         self.prompt = PromptTemplate.from_template("""
@@ -61,35 +57,35 @@ class DocumenterAgent:
                 except Exception as e:
                     print(f"❌ Failed on {block['name']}: {e}")
                     
-        def summarize_file(self, filepath: str):
-            """Generate a high-level summary of a Python file's purpose and structure."""
-            blocks = parse_python_file(filepath)
-            if not blocks:
-                print(f"⚠️ No code blocks found in: {filepath}")
-                return
+    def summarize_file(self, filepath: str):
+        """Generate a high-level summary of a Python file's purpose and structure."""
+        blocks = parse_python_file(filepath)
+        if not blocks:
+            print(f"⚠️ No code blocks found in: {filepath}")
+            return
 
-            full_code = "\n\n".join([block["code"] for block in blocks])
+        full_code = "\n\n".join([block["code"] for block in blocks])
 
-            summary_prompt = PromptTemplate.from_template("""
-            You are a senior software engineer. Given this Python file content, summarize:
+        summary_prompt = PromptTemplate.from_template("""
+        You are a senior software engineer. Given this Python file content, summarize:
 
-            - Its purpose
-            - Key classes/functions
-            - Notable dependencies or imports
+        - Its purpose
+        - Key classes/functions
+        - Notable dependencies or imports
 
-            File contents:
-            ```python
-            {code}
-            ```
-            """)
+        File contents:
+        ```python
+        {code}
+        ```
+        """)
 
-            chain = summary_prompt | self.llm | StrOutputParser()
-            try:
-                summary = chain.invoke({"code": full_code})
-                print(f"\n📄 File Summary for: {filepath}")
-                print(summary.strip())
-            except Exception as e:
-                print(f"❌ Failed to summarize file: {e}")
+        chain = summary_prompt | self.llm | StrOutputParser()
+        try:
+            summary = chain.invoke({"code": full_code})
+            print(f"\n📄 File Summary for: {filepath}")
+            print(summary.strip())
+        except Exception as e:
+            print(f"❌ Failed to summarize file: {e}")
 
 
 if __name__ == "__main__":
