@@ -1,54 +1,67 @@
-import os
-from dotenv import load_dotenv
+"""
+AnalyzerAgent — semantic code analysis using a RAG pattern.
+
+Retrieves the most relevant code chunks from ChromaDB (populated by
+``app.core.ingestion.ingest_repository``) and passes them to the LLM for
+analysis.  Requires the vector store to be populated before instantiation.
+"""
+
+import logging
 
 from app.retriever.vector_utils import get_vectorstore
-from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
-from langchain_core.runnables import Runnable
-from langchain_core.output_parsers import StrOutputParser
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-load_dotenv()  # Load OPENAI_API_KEY from .env
+from app.agents.base_agent import BaseAgent
+from app.config import config
+
+logger = logging.getLogger(__name__)
+
+_PROMPT = """
+You are a senior software engineer reviewing a codebase.
+Analyze the following code for:
+- Readability issues
+- Performance or logic bugs
+- Poor naming, modularity, or style
+Provide actionable and concise feedback in bullet points.
+
+Code to analyze:
+```python
+{code}
+```
+"""
 
 
-class AnalyzerAgent:
-    def __init__(self):
-        # ✅ Use shared vector store setup
-        self.vectorstore = get_vectorstore()
-        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 4})
+class AnalyzerAgent(BaseAgent):
+    """Analyze retrieved code chunks for bugs, smells, and style issues."""
 
+    def __init__(self) -> None:
+        super().__init__(temperature=config.openai_temperature_analysis)
+        vectorstore = get_vectorstore()
+        self.retriever = vectorstore.as_retriever(
+            search_kwargs={"k": config.retriever_k}
+        )
+        self._build_chain(_PROMPT)
 
-        # Prompt template for the LLM
-        self.prompt = PromptTemplate.from_template("""
-        You are a senior software engineer reviewing a codebase.
-        Analyze the following code for:
-        - Readability issues
-        - Performance or logic bugs
-        - Poor naming, modularity, or style
-        Provide actionable and concise feedback in bullet points.
+    def analyze(self, query: str) -> str:
+        """
+        Run semantic search for ``query`` then analyse the retrieved code.
 
-        Code to analyze:
-        ```python
-        {code}
-        ```
-        """)
+        Args:
+            query: A natural-language description of what to look for
+                   (e.g. "Find logic issues or code smells").
 
-        # LLM to generate the analysis
-        self.llm = ChatOpenAI(temperature=0.2, model="gpt-3.5-turbo")
-
-        # Combine steps into a runnable chain
-        self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
-
-    def analyze(self, query: str):
-        """Run the analyzer on a semantic query."""
+        Returns:
+            LLM analysis as a formatted string.
+        """
         docs = self.retriever.invoke(query)
-        combined_code = "\n\n".join([doc.page_content for doc in docs])
-        return self.chain.invoke({"code": combined_code})
+        if not docs:
+            logger.warning("AnalyzerAgent: no documents retrieved for query %r", query)
+            return "No code was retrieved from the vector store. Run ingestion first."
+        combined_code = "\n\n".join(doc.page_content for doc in docs)
+        logger.info("AnalyzerAgent: analysing %d retrieved code chunks", len(docs))
+        return self._invoke(code=combined_code)
 
 
-# ✅ Test block (for dev only)
 if __name__ == "__main__":
-    print("🤖 Analyzer Agent Starting...")
+    logging.basicConfig(level=logging.INFO)
     agent = AnalyzerAgent()
-    response = agent.analyze("Find complex or hard-to-read logic")
-    print("\n🔍 ANALYZER OUTPUT:\n")
-    print(response)
+    result = agent.analyze("Find complex or hard-to-read logic")
+    print(result)

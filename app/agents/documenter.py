@@ -1,105 +1,142 @@
-import os
-from dotenv import load_dotenv
-from glob import glob
+"""
+DocumenterAgent — generates docstrings and file-level summaries.
 
-from langchain_openai import ChatOpenAI
-from app.retriever.vector_utils import get_vectorstore
-from langchain.prompts import PromptTemplate
-from langchain_core.runnables import Runnable
+Returns structured data instead of printing, so callers (CLI, Streamlit, tests)
+can handle output in whatever way suits them.
+"""
+
+import logging
+
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+
+from app.agents.base_agent import BaseAgent
+from app.config import config
 from app.utils.file_utils import collect_supported_files
+from app.utils.parser import parse_file_by_type
+
+logger = logging.getLogger(__name__)
+
+_DOCSTRING_PROMPT = """
+You are a Python expert. Given the following function or class, generate a clean,
+professional docstring using triple double quotes.
+
+Rules:
+- Explain what it does
+- Include parameters (if any)
+- Mention return values (if applicable)
+- Be brief and accurate
+
+Code:
+```python
+{code}
+```
+"""
+
+_SUMMARY_PROMPT = """
+You are a senior software engineer. Given this Python file content, summarize:
+
+- Its purpose
+- Key classes/functions
+- Notable dependencies or imports
+
+File contents:
+```python
+{code}
+```
+"""
 
 
-from app.utils.parser import parse_file_by_type  # make sure this exists
+class DocumenterAgent(BaseAgent):
+    """Generate docstrings for functions/classes and file-level summaries."""
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-load_dotenv()
+    def __init__(self) -> None:
+        super().__init__(temperature=config.openai_temperature_generation)
+        self._build_chain(_DOCSTRING_PROMPT)
+        # Build a separate chain for file summaries (different prompt, same LLM)
+        summary_prompt = PromptTemplate.from_template(_SUMMARY_PROMPT)
+        self._summary_chain = summary_prompt | self.llm | StrOutputParser()
 
+    def document_functions(
+        self,
+        code_dir: str = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """
+        Generate docstrings for functions and classes in ``code_dir``.
 
-class DocumenterAgent:
-    def __init__(self):
-        # Embeddings + vectorstore setup
-        self.vectorstore = get_vectorstore()
-        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 1})
+        Args:
+            code_dir: Path to the repository root. Defaults to config value.
+            limit:    Maximum number of files to process.
 
-
-        # Prompt to generate docstrings
-        self.prompt = PromptTemplate.from_template("""
-        You are a Python expert. Given the following function or class, generate a clean, professional docstring using triple double quotes.
-
-        Rules:
-        - Explain what it does
-        - Include parameters (if any)
-        - Mention return values (if applicable)
-        - Be brief and accurate
-
-        Code:
-        ```python
-        {code}
-        ```
-        """)
-
-        self.llm = ChatOpenAI(temperature=0.3, model="gpt-3.5-turbo")
-        self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
-
-    def document_functions(self, code_dir: str = "data/repos", limit: int = 5):
+        Returns:
+            List of dicts with keys: file, name, type, lineno, docstring.
+        """
+        code_dir = code_dir or config.default_repos_dir
         all_files = collect_supported_files(code_dir)
-        print(f"📁 Found {len(all_files)} supported files")
+        logger.info("DocumenterAgent: found %d supported files", len(all_files))
 
-        for f in all_files[:limit]:
-            print(f"\n📄 File: {f}")
-            blocks = parse_file_by_type(f)
-
+        results: list[dict] = []
+        for filepath in all_files[:limit]:
+            logger.debug("DocumenterAgent: documenting %s", filepath)
+            blocks = parse_file_by_type(filepath)
             for block in blocks:
-                code_snippet = block["code"]
                 try:
-                    docstring = self.chain.invoke({"code": code_snippet})
-                    print(f"\n🔧 {block['type']} `{block['name']}` at line {block['lineno']}")
-                    print(docstring.strip())
-                except Exception as e:
-                    print(f"❌ Failed on {block['name']}: {e}")
+                    docstring = self._invoke(code=block["code"])
+                    results.append(
+                        {
+                            "file": filepath,
+                            "name": block["name"],
+                            "type": block["type"],
+                            "lineno": block["lineno"],
+                            "docstring": docstring.strip(),
+                        }
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "DocumenterAgent: failed on %s in %s — %s",
+                        block["name"],
+                        filepath,
+                        exc,
+                    )
 
-                    
-    def summarize_file(self, filepath: str):
-        """Generate a high-level summary of a Python file's purpose and structure."""
+        return results
+
+    def summarize_file(self, filepath: str) -> str:
+        """
+        Generate a high-level summary of a Python file's purpose and structure.
+
+        Args:
+            filepath: Path to the Python file.
+
+        Returns:
+            Summary string, or a warning message if no code blocks found.
+        """
         blocks = parse_file_by_type(filepath)
         if not blocks:
-            print(f"⚠️ No code blocks found in: {filepath}")
-            return
+            logger.warning("DocumenterAgent: no code blocks in %s", filepath)
+            return f"No code blocks found in: {filepath}"
 
-        full_code = "\n\n".join([block["code"] for block in blocks])
-
-        summary_prompt = PromptTemplate.from_template("""
-        You are a senior software engineer. Given this Python file content, summarize:
-
-        - Its purpose
-        - Key classes/functions
-        - Notable dependencies or imports
-
-        File contents:
-        ```python
-        {code}
-        ```
-        """)
-
-        chain = summary_prompt | self.llm | StrOutputParser()
+        full_code = "\n\n".join(block["code"] for block in blocks)
         try:
-            summary = chain.invoke({"code": full_code})
-            print(f"\n📄 File Summary for: {filepath}")
-            print(summary.strip())
-        except Exception as e:
-            print(f"❌ Failed to summarize file: {e}")
+            summary = self._summary_chain.invoke({"code": full_code})
+            logger.info("DocumenterAgent: summarized %s", filepath)
+            return summary.strip()
+        except Exception as exc:
+            logger.error("DocumenterAgent: failed to summarize %s — %s", filepath, exc)
+            return f"Failed to summarize file: {exc}"
 
 
 if __name__ == "__main__":
-    print("📝 Documenter Agent Running...\n")
+    logging.basicConfig(level=logging.INFO)
     agent = DocumenterAgent()
 
-    # Function-level documentation
-    agent.document_functions(limit=1)
+    results = agent.document_functions(limit=1)
+    for r in results:
+        print(f"\n{r['type']} `{r['name']}` at line {r['lineno']}:")
+        print(r["docstring"])
 
-    # File-level summary
-    print("\n📘 Generating summary for a single file...\n")
-    test_file = "data/repos/psf_requests/requests/sessions.py"  # Use a real one from your repo
-    agent.summarize_file(test_file)
-
+    all_files = collect_supported_files(config.default_repos_dir)
+    if all_files:
+        print("\n--- File Summary ---")
+        print(agent.summarize_file(all_files[0]))
