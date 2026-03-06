@@ -1,59 +1,96 @@
-import os
-from dotenv import load_dotenv
-from glob import glob
+"""
+QAAgent — code quality review agent.
 
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import Runnable
+Reviews code blocks for readability, naming conventions, potential bugs,
+PEP 8 compliance, and modularity. Returns structured data rather than printing.
+"""
+
+import logging
+
+from app.agents.base_agent import BaseAgent
+from app.config import config
 from app.utils.file_utils import collect_supported_files
 from app.utils.parser import parse_file_by_type
 
-load_dotenv()
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+logger = logging.getLogger(__name__)
+
+_PROMPT = """
+You are a senior software engineer performing a code quality review.
+Review the following Python code and provide feedback on:
+
+- Code readability and structure
+- Naming conventions (functions, variables)
+- Potential bugs or logic errors
+- Style and formatting (PEP8)
+- Suggestions for modularity and maintainability
+
+Be concise, professional, and list your feedback in bullet points.
+
+Code:
+```python
+{code}
+```
+"""
 
 
-class QAAgent:
-    def __init__(self):
-        self.prompt = PromptTemplate.from_template("""
-        You are a senior software engineer performing a code quality review.
-        Review the following Python code and provide feedback on:
+class QAAgent(BaseAgent):
+    """Review code files for quality, style, and potential bugs."""
 
-        - Code readability and structure
-        - Naming conventions (functions, variables)
-        - Potential bugs or logic errors
-        - Style and formatting (PEP8)
-        - Suggestions for modularity and maintainability
+    def __init__(self) -> None:
+        super().__init__(temperature=config.openai_temperature_analysis)
+        self._build_chain(_PROMPT)
 
-        Be concise, professional, and list your feedback in bullet points.
+    def review_codebase(
+        self,
+        code_dir: str = None,
+        max_files: int = None,
+    ) -> list[dict]:
+        """
+        Review code blocks in ``code_dir`` for quality issues.
 
-        Code:
-        ```python
-        {code}
-        ```
-        """)
+        Args:
+            code_dir:  Path to the repository root. Defaults to config value.
+            max_files: Maximum number of files to review.
 
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2)
-        self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
-
-    def review_codebase(self, code_dir="data/repos", max_files=3):
+        Returns:
+            List of dicts with keys: file, name, type, lineno, review.
+        """
+        code_dir = code_dir or config.default_repos_dir
+        max_files = max_files or config.default_max_files
         all_files = collect_supported_files(code_dir)
-        print(f"📁 Found {len(all_files)} supported files")
+        logger.info("QAAgent: found %d supported files", len(all_files))
 
-        for f in all_files[:max_files]:
-            print(f"\n📄 Reviewing: {f}")
-            blocks = parse_file_by_type(f)
-
+        results: list[dict] = []
+        for filepath in all_files[:max_files]:
+            logger.debug("QAAgent: reviewing %s", filepath)
+            blocks = parse_file_by_type(filepath)
             for block in blocks:
                 try:
-                    review = self.chain.invoke({"code": block["code"]})
-                    print(f"\n🔍 {block['type']} `{block['name']}` at line {block['lineno']}")
-                    print(review.strip())
-                except Exception as e:
-                    print(f"❌ Failed to review `{block['name']}`: {e}")
+                    review = self._invoke(code=block["code"])
+                    results.append(
+                        {
+                            "file": filepath,
+                            "name": block["name"],
+                            "type": block["type"],
+                            "lineno": block["lineno"],
+                            "review": review.strip(),
+                        }
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "QAAgent: failed on %s in %s — %s",
+                        block["name"],
+                        filepath,
+                        exc,
+                    )
+
+        return results
 
 
 if __name__ == "__main__":
-    print("🧪 QA Agent Starting...\n")
+    logging.basicConfig(level=logging.INFO)
     agent = QAAgent()
-    agent.review_codebase(max_files=2)
+    results = agent.review_codebase(max_files=2)
+    for r in results:
+        print(f"\n{r['type']} `{r['name']}` at line {r['lineno']}:")
+        print(r["review"])

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "codebase-companion"
+version = "0.1.0"
+description = "An autonomous AI DevOps assistant that reviews, documents, and tests codebases"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-openai>=0.3",
+    "langchain-community>=0.3",
+    "langchain-huggingface>=0.2",
+    "langchain-chroma>=0.2",
+    "langchain-text-splitters>=0.3",
+    "openai>=1.0",
+    "chromadb>=1.0",
+    "sentence-transformers>=4.0",
+    "streamlit>=1.40",
+    "reportlab>=4.0",
+    "nbformat>=5.0",
+    "GitPython>=3.1",
+    "python-dotenv>=1.0",
+    "torch>=2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

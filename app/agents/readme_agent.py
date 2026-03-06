@@ -1,67 +1,85 @@
-import os
-from dotenv import load_dotenv
-from glob import glob
+"""
+ReadmeAgent — generates a professional README.md from codebase context.
+"""
 
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import Runnable
+import logging
+
+from app.agents.base_agent import BaseAgent
+from app.config import config
 from app.utils.file_utils import collect_supported_files
 from app.utils.parser import parse_file_by_type
 
-load_dotenv()
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+logger = logging.getLogger(__name__)
+
+_PROMPT = """
+You are a senior software engineer and technical writer.
+Given this codebase context, write a professional-level README.md draft.
+
+Include:
+- Project title and purpose
+- Key modules and features
+- How to install and run
+- Example usage
+- Testing and contribution instructions
+
+Be concise, clear, and helpful for new developers.
+
+Codebase summary:
+```python
+{code}
+```
+"""
 
 
-class ReadmeAgent:
-    def __init__(self):
-        self.prompt = PromptTemplate.from_template("""
-        You are a senior software engineer and technical writer.
-        Given this codebase context, write a professional-level README.md draft.
+class ReadmeAgent(BaseAgent):
+    """Generate a professional README.md from codebase code blocks."""
 
-        Include:
-        - Project title and purpose
-        - Key modules and features
-        - How to install and run
-        - Example usage
-        - Testing and contribution instructions
+    def __init__(self) -> None:
+        super().__init__(temperature=config.openai_temperature_generation)
+        self._build_chain(_PROMPT)
 
-        Be concise, clear, and helpful for new developers.
+    def generate_readme(
+        self,
+        code_dir: str = None,
+        max_blocks: int = None,
+    ) -> str:
+        """
+        Generate a README.md draft from the code found in ``code_dir``.
 
-        Codebase summary:
-        ```python
-        {code}
-        ```
-        """)
+        Args:
+            code_dir:   Path to the repository root. Defaults to config value.
+            max_blocks: Cap on the number of code blocks included in the prompt.
+                        Defaults to config value.
 
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3)
-        self.chain: Runnable = self.prompt | self.llm | StrOutputParser()
+        Returns:
+            Generated README content as a string.
+        """
+        code_dir = code_dir or config.default_repos_dir
+        max_blocks = max_blocks or config.default_max_blocks
 
-    def generate_readme(self, code_dir="data/repos", max_blocks=50):
         all_files = collect_supported_files(code_dir)
-        print(f"📁 Found {len(all_files)} supported files in repo")
+        logger.info("ReadmeAgent: found %d supported files", len(all_files))
 
-        all_blocks = []
-        for f in all_files:
-            blocks = parse_file_by_type(f)
-            all_blocks.extend(block["code"] for block in blocks)
+        all_block_texts: list[str] = []
+        for filepath in all_files:
+            blocks = parse_file_by_type(filepath)
+            all_block_texts.extend(block["code"] for block in blocks)
 
+        if not all_block_texts:
+            return "No code blocks found to generate README."
 
-        if not all_blocks:
-            return "⚠️ No code blocks found to generate README."
-
-        # Limit total tokens (simple block count cap)
-        full_context = "\n\n".join(all_blocks[:max_blocks])
-        print(f"🧠 Using {min(max_blocks, len(all_blocks))} code blocks for README generation...")
+        used = min(max_blocks, len(all_block_texts))
+        logger.info("ReadmeAgent: using %d code blocks for README generation", used)
+        full_context = "\n\n".join(all_block_texts[:max_blocks])
 
         try:
-            return self.chain.invoke({"code": full_context}).strip()
-        except Exception as e:
-            return f"❌ Failed to generate README: {e}"
+            return self._invoke(code=full_context).strip()
+        except Exception as exc:
+            logger.error("ReadmeAgent: failed to generate README — %s", exc)
+            return f"Failed to generate README: {exc}"
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     agent = ReadmeAgent()
-    print("📄 Generating Full README Draft...\n")
-    readme = agent.generate_readme()
-    print(readme)
+    print(agent.generate_readme())

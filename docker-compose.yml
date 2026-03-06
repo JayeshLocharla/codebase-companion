@@ -1,0 +1,36 @@
+services:
+  codebase-companion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codebase-companion:latest
+    container_name: codebase-companion
+
+    # Load environment variables from your .env file.
+    # Copy .env.example → .env and set OPENAI_API_KEY before starting.
+    env_file:
+      - .env
+
+    ports:
+      - "8501:8501"
+
+    # Persist ChromaDB embeddings and cloned repos across container restarts.
+    volumes:
+      - chroma_data:/app/chroma_db
+      - repo_cache:/app/data/repos
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  chroma_data:
+    driver: local
+  repo_cache:
+    driver: local
